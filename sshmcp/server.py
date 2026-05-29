@@ -1,9 +1,11 @@
 """MCP Server for secure SSH proxy with TOTP verification.
 
-Exposes 3 read/execute tools for AI coding assistants (Claude Code, Codex, OpenCode):
+Exposes 5 tools for AI coding assistants (Claude Code, Codex, OpenCode):
 - vault_list_servers: List registered servers (no sensitive data)
 - vault_exec: Execute a command (requires TOTP)
 - vault_exec_batch: Execute multiple commands (single TOTP)
+- vault_read: Read a file via SFTP (requires TOTP)
+- vault_write: Write a file via SFTP (requires TOTP, auto-backup)
 
 Server management (add/remove) is done ONLY via CLI (`sshmcp add/remove`),
 keeping credentials completely isolated from AI.
@@ -17,7 +19,7 @@ from pydantic import BaseModel
 
 from sshmcp.vault import Vault
 from sshmcp.totp import verify_code
-from sshmcp.ssh_manager import execute_command, execute_commands
+from sshmcp.ssh_manager import execute_command, execute_commands, read_file, write_file
 
 mcp = FastMCP("sshmcp")
 
@@ -217,6 +219,106 @@ async def vault_exec_batch(ctx: Context, alias: str, commands: list[str]) -> str
                 f"Connect once manually first: ssh {server.username}@{server.host} -p {server.port}"
             )
         return f"SSH error: {type(e).__name__}: {err_msg}"
+
+
+@mcp.tool()
+async def vault_read(ctx: Context, alias: str, path: str) -> str:
+    """Read a file from a remote SSH server via SFTP. Requires TOTP verification.
+
+    Reads the file content and returns it as text. Limited to 1MB by default.
+    For larger files, use vault_exec with cat/head/tail instead.
+
+    Args:
+        alias: Server alias (as registered via `sshmcp add`)
+        path: Absolute path of the file to read on the remote server
+
+    Returns:
+        File content as text, or error message
+    """
+    vault = _get_vault()
+    server = vault.get_server(alias)
+
+    if server is None:
+        return f"Error: Server '{alias}' not found. Use vault_list_servers to see available servers."
+
+    error = await _verify_totp(ctx, vault, alias)
+    if error:
+        return error
+
+    key_content = vault.decrypt_ssh_key(alias)
+    password = vault.decrypt_password(alias)
+    if key_content is None and password is None:
+        return "Error: No SSH key or password configured for this server."
+
+    try:
+        content = read_file(
+            host=server.host,
+            username=server.username,
+            port=server.port,
+            path=path,
+            key_content=key_content,
+            password=password,
+        )
+        return f"File: {path} ({len(content)} chars)\n\n{content}"
+    except FileNotFoundError:
+        return f"Error: File not found: {path}"
+    except PermissionError:
+        return f"Error: Permission denied: {path}"
+    except ValueError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"SSH error: {type(e).__name__}: {str(e)[:200]}"
+
+
+@mcp.tool()
+async def vault_write(
+    ctx: Context, alias: str, path: str, content: str, backup: bool = True
+) -> str:
+    """Write a file to a remote SSH server via SFTP. Requires TOTP verification.
+
+    Creates a timestamped backup of the existing file before overwriting (unless backup=False).
+    Use vault_read first to check the current content before writing.
+
+    Args:
+        alias: Server alias (as registered via `sshmcp add`)
+        path: Absolute path of the file to write on the remote server
+        content: The text content to write to the file
+        backup: Whether to create a backup before overwriting (default: True)
+
+    Returns:
+        Status message with bytes written and backup path (if any)
+    """
+    vault = _get_vault()
+    server = vault.get_server(alias)
+
+    if server is None:
+        return f"Error: Server '{alias}' not found. Use vault_list_servers to see available servers."
+
+    error = await _verify_totp(ctx, vault, alias)
+    if error:
+        return error
+
+    key_content = vault.decrypt_ssh_key(alias)
+    password = vault.decrypt_password(alias)
+    if key_content is None and password is None:
+        return "Error: No SSH key or password configured for this server."
+
+    try:
+        result = write_file(
+            host=server.host,
+            username=server.username,
+            port=server.port,
+            path=path,
+            content=content,
+            key_content=key_content,
+            password=password,
+            backup=backup,
+        )
+        return result
+    except PermissionError:
+        return f"Error: Permission denied: {path}"
+    except Exception as e:
+        return f"SSH error: {type(e).__name__}: {str(e)[:200]}"
 
 
 def run():

@@ -7,6 +7,7 @@ Key features:
 - Executes commands and returns stdout/stderr
 """
 
+import time
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -99,6 +100,136 @@ def execute_command(
             stderr=err,
             exit_code=exit_code,
         )
+    finally:
+        client.close()
+
+
+def read_file(
+    host: str,
+    username: str,
+    port: int,
+    path: str,
+    key_content: Optional[bytes] = None,
+    password: Optional[str] = None,
+    passphrase: Optional[str] = None,
+    timeout: int = 30,
+    max_size: int = 1024 * 1024,  # 1MB default limit
+) -> str:
+    """Read a file from the remote server via SFTP.
+
+    Returns file content as string. Raises on errors or if file exceeds max_size.
+    """
+    client = paramiko.SSHClient()
+    known_hosts = Path.home() / ".ssh" / "known_hosts"
+    if known_hosts.exists():
+        client.load_system_host_keys(str(known_hosts))
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+
+    connect_kwargs = {
+        "hostname": host,
+        "port": port,
+        "username": username,
+        "timeout": timeout,
+        "banner_timeout": timeout,
+        "auth_timeout": timeout,
+    }
+
+    if key_content:
+        connect_kwargs["pkey"] = _load_key_from_memory(key_content, passphrase)
+    elif password:
+        connect_kwargs["password"] = password
+    else:
+        raise ValueError("Either key_content or password must be provided")
+
+    try:
+        client.connect(**connect_kwargs)
+        sftp = client.open_sftp()
+
+        try:
+            # Check file size before reading
+            stat = sftp.stat(path)
+            if stat.st_size > max_size:
+                raise ValueError(
+                    f"File too large ({stat.st_size} bytes, limit {max_size} bytes). "
+                    f"Use vault_exec to read with cat/head/tail instead."
+                )
+
+            with sftp.open(path, "r") as f:
+                content = f.read()
+
+            if isinstance(content, bytes):
+                return content.decode("utf-8", errors="replace")
+            return content
+        finally:
+            sftp.close()
+    finally:
+        client.close()
+
+
+def write_file(
+    host: str,
+    username: str,
+    port: int,
+    path: str,
+    content: str,
+    key_content: Optional[bytes] = None,
+    password: Optional[str] = None,
+    passphrase: Optional[str] = None,
+    timeout: int = 30,
+    backup: bool = True,
+) -> str:
+    """Write a file to the remote server via SFTP.
+
+    Optionally creates a timestamped backup before overwriting.
+    Returns a status message.
+    """
+    client = paramiko.SSHClient()
+    known_hosts = Path.home() / ".ssh" / "known_hosts"
+    if known_hosts.exists():
+        client.load_system_host_keys(str(known_hosts))
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+
+    connect_kwargs = {
+        "hostname": host,
+        "port": port,
+        "username": username,
+        "timeout": timeout,
+        "banner_timeout": timeout,
+        "auth_timeout": timeout,
+    }
+
+    if key_content:
+        connect_kwargs["pkey"] = _load_key_from_memory(key_content, passphrase)
+    elif password:
+        connect_kwargs["password"] = password
+    else:
+        raise ValueError("Either key_content or password must be provided")
+
+    try:
+        client.connect(**connect_kwargs)
+        sftp = client.open_sftp()
+
+        try:
+            # Create backup if file exists and backup is enabled
+            backup_path = None
+            if backup:
+                try:
+                    sftp.stat(path)
+                    ts = int(time.time() * 1000)  # milliseconds to avoid collision
+                    backup_path = f"{path}.bak.{ts}"
+                    sftp.rename(path, backup_path)
+                except FileNotFoundError:
+                    backup_path = None  # New file, no backup needed
+
+            with sftp.open(path, "w") as f:
+                f.write(content)
+
+            msg = f"Written {len(content)} bytes to {path}"
+            if backup_path:
+                msg += f" (backup: {backup_path})"
+            return msg
+        finally:
+            sftp.close()
     finally:
         client.close()
 
