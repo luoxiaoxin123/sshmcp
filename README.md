@@ -50,8 +50,21 @@ sshmcp 作为中间层隔离了 AI 和服务器：
 
 需要 Python 3.10+。
 
+### 方式一：uvx 一键安装（推荐）
+
+无需 clone 仓库，直接运行：
+
 ```bash
-git clone https://github.com/yourname/sshmcp.git
+# 添加 MCP 服务器（Claude Code）
+claude mcp add sshmcp -s user -- uvx --from "git+https://github.com/luoxiaoxin123/sshmcp" sshmcp
+```
+
+安装后重启 AI 工具即可使用。`uvx` 会自动处理依赖，不需要手动管理文件夹。
+
+### 方式二：本地安装
+
+```bash
+git clone https://github.com/luoxiaoxin123/sshmcp.git
 cd sshmcp
 uv sync          # 推荐
 # 或 pip install -e .
@@ -59,21 +72,37 @@ uv sync          # 推荐
 
 Windows 用户额外安装：`uv sync --extra win`
 
+本地安装后需手动配置 MCP：
+```bash
+uv run sshmcp setup              # 自动配置所有已检测到的工具
+uv run sshmcp setup --tool claude  # 只配置某个
+```
+
 ## 使用
 
 ### 1. 添加服务器
 
 ```bash
 # 密钥登录（默认端口 22）
-uv run sshmcp add web --host 1.2.3.4 --username root --key-path ~/.ssh/id_rsa
+sshmcp add web --host 1.2.3.4 --username root --key-path ~/.ssh/id_rsa
 
 # 密钥登录（自定义端口）
-uv run sshmcp add web --host 1.2.3.4 --username root --port 2222 --key-path ~/.ssh/id_rsa
+sshmcp add web --host 1.2.3.4 --username root --port 2222 --key-path ~/.ssh/id_rsa
 
 # 密码登录（交互式输入密码，不会出现在命令历史中）
-uv run sshmcp add db --host 1.2.3.5 --username root --port 3306
+sshmcp add db --host 1.2.3.5 --username root --port 3306
 # 然后选择 (p)assword 并输入密码
 ```
+
+> **提示**：uvx 方式的 CLI 命令需要用完整格式：
+> ```bash
+> uvx --from "git+https://github.com/luoxiaoxin123/sshmcp" sshmcp add web --host 1.2.3.4 --username root --key-path ~/.ssh/id_rsa
+> ```
+> 或者用 `uv tool install` 全局安装 CLI：
+> ```bash
+> uv tool install "git+https://github.com/luoxiaoxin123/sshmcp"
+> sshmcp add web --host 1.2.3.4 --username root --key-path ~/.ssh/id_rsa
+> ```
 
 > **注意**：首次连接的服务器需要先手动 SSH 一次，让系统记录 host key：
 > ```bash
@@ -83,16 +112,19 @@ uv run sshmcp add db --host 1.2.3.5 --username root --port 3306
 ### 2. 导入 TOTP
 
 ```bash
-uv run sshmcp totp
+sshmcp totp
 ```
 
 把输出的 URI 导入你的验证器 App。所有服务器共用一个 TOTP。
 
 ### 3. 配置 AI 工具
 
+**方式一（uvx）已在安装时完成**，跳过此步。
+
+**方式二（本地安装）** 需要手动配置：
 ```bash
-uv run sshmcp setup              # 自动配置所有已检测到的工具
-uv run sshmcp setup --tool claude  # 只配置某个
+sshmcp setup              # 自动配置所有已检测到的工具
+sshmcp setup --tool claude  # 只配置某个
 ```
 
 支持 Claude Code、OpenAI Codex CLI、OpenCode。重启 AI 工具后生效。
@@ -101,19 +133,30 @@ uv run sshmcp setup --tool claude  # 只配置某个
 
 直接跟 AI 说 "帮我看下 web 上的 docker 状态"，AI 会调用 sshmcp，弹出验证码输入框，你输入后命令执行。
 
+也可以让 AI 读写远程文件：
+
+```
+你："帮我看下 nginx 配置有没有问题"
+AI → vault_read("web", "/etc/nginx/nginx.conf") → 分析配置
+
+你："把 worker_connections 改成 4096"
+AI → vault_write("web", "/etc/nginx/nginx.conf", "修改后的内容")
+     → 自动备份原文件，写入新内容
+```
+
 ## 命令速查
 
-所有命令前加 `uv run`（如果全局安装了可以省略）。
+本地安装方式需在命令前加 `uv run`（如 `uv run sshmcp add ...`），uvx 方式直接使用 `sshmcp`。
 
 | 命令 | 说明 |
 |------|------|
-| `uv run sshmcp add <别名> [--host] [--username] [--port] [--key-path]` | 添加服务器 |
-| `uv run sshmcp list` | 列出服务器 |
-| `uv run sshmcp remove <别名>` | 删除服务器 |
-| `uv run sshmcp totp` | 显示 TOTP URI |
-| `uv run sshmcp config [--totp-timeout <分钟>]` | 查看/修改超时时间（默认 5 分钟） |
-| `uv run sshmcp setup [--tool claude\|codex\|opencode\|all]` | 配置 AI 工具 |
-| `uv run sshmcp run` | 启动 MCP 服务器（通常自动启动） |
+| `sshmcp add <别名> [--host] [--username] [--port] [--key-path]` | 添加服务器 |
+| `sshmcp list` | 列出服务器 |
+| `sshmcp remove <别名>` | 删除服务器 |
+| `sshmcp totp` | 显示 TOTP URI |
+| `sshmcp config [--totp-timeout <分钟>]` | 查看/修改超时时间（默认 5 分钟） |
+| `sshmcp setup [--tool claude\|codex\|opencode\|all]` | 配置 AI 工具（仅本地安装方式需要） |
+| `sshmcp run` | 启动 MCP 服务器（通常自动启动） |
 
 ## 常见问题
 
@@ -121,7 +164,7 @@ uv run sshmcp setup --tool claude  # 只配置某个
 A: 所有支持 MCP 协议的工具。已内置配置：Claude Code、OpenAI Codex CLI、OpenCode。
 
 **Q: TOTP 验证太频繁？**
-A: 验证一次后同一台服务器超时时间内免验证。`uv run sshmcp config --totp-timeout 10` 改成 10 分钟。
+A: 验证一次后同一台服务器超时时间内免验证。`sshmcp config --totp-timeout 10` 改成 10 分钟。
 
 **Q: 跨平台吗？**
 A: 是。Windows、macOS、Linux 均支持。
